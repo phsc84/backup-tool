@@ -73,23 +73,25 @@ func main() {
 	}
 
 	archiveFileName := fmt.Sprintf("backup_%s_%s.7z", time.Now().Format("2006-01-02"), randomID)
+
 	tempArchivePath := filepath.Join(config.TempDir, archiveFileName)
-
 	log.Printf("Creating archive at temporary path: %s", tempArchivePath)
-
 	if err := createBackupArchive(config.Directories, tempArchivePath, *debug); err != nil {
 		log.Fatalf("Failed to create backup archive: %v", err)
 	}
 
 	finalArchivePath := filepath.Join(config.BackupDir, archiveFileName)
 	log.Printf("Moving archive to final destination: %s", finalArchivePath)
-
-	if err := moveArchive(tempArchivePath, finalArchivePath); err != nil {
+	if err := os.Rename(tempArchivePath, finalArchivePath); err != nil {
 		log.Fatalf("Failed to move archive: %v", err)
 	}
 
-	if err := cleanupOldBackups(); err != nil {
-		log.Printf("Failed to clean up old backups: %v", err)
+	if err := cleanupTempDir(); err != nil {
+		log.Printf("Failed to clean up temp directory: %v", err)
+	}
+
+	if err := cleanupBackupDir(); err != nil {
+		log.Printf("Failed to clean up backup directory: %v", err)
 	}
 
 	if err := sendStatusEmail(); err != nil {
@@ -106,11 +108,11 @@ func main() {
 
 // Embedding the 7-Zip executables for macOS and Windows into the binary.
 
-//go:embed resources/7zz
-var sevenZipMacOS []byte
+//go:embed assets/7zz
+var sevenZipMac []byte
 
-//go:embed resources/7za.exe
-var sevenZipWindows []byte
+//go:embed assets/7za.exe
+var sevenZipWin []byte
 
 // extract7zz extracts the appropriate 7-Zip binary for the current OS to a temporary location.
 func extract7zz(tempDir string) (string, error) {
@@ -119,10 +121,10 @@ func extract7zz(tempDir string) (string, error) {
 
 	switch runtime.GOOS {
 	case "darwin":
-		embeddedData = sevenZipMacOS
+		embeddedData = sevenZipMac
 		fileName = "7zz"
 	case "windows":
-		embeddedData = sevenZipWindows
+		embeddedData = sevenZipWin
 		fileName = "7za.exe"
 	default:
 		return "", errors.New("unsupported operating system")
@@ -227,11 +229,25 @@ func createBackupArchive(directories []string, outputPath string, debug bool) er
 	return nil
 }
 
-func moveArchive(src, dst string) error {
-	return os.Rename(src, dst)
+func cleanupTempDir() error {
+	files, err := os.ReadDir(config.TempDir)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), "backup_") && strings.HasSuffix(file.Name(), ".7z") {
+			log.Printf("Removing old backup file: %s", file.Name())
+			if err := os.Remove(filepath.Join(config.TempDir, file.Name())); err != nil {
+				log.Printf("Failed to delete old backup file: %v", err)
+			}
+		}
+	}
+
+	return nil
 }
 
-func cleanupOldBackups() error {
+func cleanupBackupDir() error {
 	files, err := os.ReadDir(config.BackupDir)
 	if err != nil {
 		return err
@@ -255,12 +271,14 @@ func cleanupOldBackups() error {
 	// Sort by creation time
 	backupFiles = sortFilesByModTime(backupFiles)
 
+	// Remove old backup files
 	for _, oldFile := range backupFiles[:len(backupFiles)-config.RetainRecentBackups] {
 		log.Printf("Removing old backup file: %s", oldFile.Name())
 		if err := os.Remove(filepath.Join(config.BackupDir, oldFile.Name())); err != nil {
 			log.Printf("Failed to delete old backup file: %v", err)
 		}
 	}
+
 	return nil
 }
 
