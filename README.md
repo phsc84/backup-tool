@@ -1,4 +1,4 @@
-# backup-tool
+# BackupTool
 
 ## Installation and configuration
 ### Windows
